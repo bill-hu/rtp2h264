@@ -27,34 +27,41 @@ int process(FILE *fpi,FILE * fpo) {
 	uint8_t *received_frame = (uint8_t *)malloc(numBytes);
 	uint8_t *buffer_rtp = (uint8_t *)malloc(64000),* buffer;
 	int len = 0, frameLen = 0;
+	int total_read = 0, total_write = 0;
 	int keyFrame = 0;
 	int keyframe_ts = 0;
 	RtpHeader * pRtpHeader = NULL;
 	uint32_t ts = 0;
 	bool bquit = false;
 
-
 	while (1) {
 		keyFrame = 0;
 		frameLen = 0;
-		len = 0;
 		while (1) {
+			len = 0;
 			/* RTP payload */
 			fread(&len, sizeof(int), 1, fpi);
 			int readlen = fread(buffer_rtp, sizeof(char), len, fpi);
+			total_read += readlen;
 			if (readlen != len) {
-				printf("Didn't manage to read all the bytes we needed (%d < %d)...\n", bytes, len);
+				int pos = ftell(fpi);
+				printf("Didn't manage to read all the bytes we needed (%d < %d)..., %d\n", bytes, len, pos);
 				bquit = true;
 				break;
 			}
 
-			pRtpHeader =(erizo::RtpHeader *) buffer_rtp;
+			pRtpHeader = (erizo::RtpHeader *) buffer_rtp;
 			buffer = buffer_rtp + pRtpHeader->getHeaderLength();
 			if (!ts) {
 				ts = pRtpHeader->timestamp;
 			}
 
 			len -= pRtpHeader->getHeaderLength();
+
+			if (len <= 0) {
+				bquit = true;
+				break;
+			}
 
 			/* H.264 depay */
 			int jump = 0;
@@ -128,25 +135,30 @@ int process(FILE *fpi,FILE * fpo) {
 					/* Last part of fragmented packet (E bit set) */
 				}
 			}
+
 			memcpy(received_frame + frameLen, buffer + jump, len);
 			frameLen += len;
-			if (len == 0)
+			if (pRtpHeader->getMarker()) {
 				break;
-			/* Check if timestamp changes: marker bit is not mandatory, and may be lost as well */
-			if (pRtpHeader->timestamp > ts)
-				break;
+			}
 		}
+
+		if (bquit) {
+			break;
+		}
+
+		printf("total read:%d , total write:%d\n", total_read, total_write);
 		if (frameLen > 0) {
 			/* Save the frame */
 			fwrite(received_frame, frameLen, 1, fpo);
+			total_write += frameLen;
+
 			if (pRtpHeader) {
 				ts = pRtpHeader->timestamp;
 			}
 		}
-		if (bquit) {
-			break;
-		}
 	}
+	printf("total read:%d , total write:%d\n", total_read, total_write);
 	free(received_frame);
 	free(buffer_rtp);
 	return 0;
